@@ -1,0 +1,9 @@
+# macOS
+.DS_Store
+
+# dbt
+dbt_packages/
+dbt_internal_packages/
+target/
+logs/
+.env

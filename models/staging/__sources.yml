@@ -1,0 +1,10 @@
+version: 2
+
+# Try using these source definitions instead!
+sources:
+  - name: ecom
+    schema: "{{ target.schema }}"
+    description: E-commerce data
+    tables:
+      - name: ecommerce_dataset_updated
+        description: One record per person who has purchased one item

@@ -1,0 +1,132 @@
+version: 2
+
+models:
+- name: master_orders
+  description: >
+    One row per order (one user purchasing one product), with prices converted
+    to GBP using the daily USD->GBP exchange rate from the usd_to_gbp_rate seed.
+    Grain: one row per order_master_id.
+  config:
+    contract:
+      enforced: true
+  columns:
+  - name: order_master_id
+    description: Surrogate primary key (hash of user_id + product_id + order_date)
+    data_type: string
+    data_tests:
+    - unique
+    - not_null
+  - name: user_master_id
+    description: Foreign key to master_users (hash of user_id)
+    data_type: string
+    data_tests:
+    - not_null
+    - relationships:
+        arguments:
+          to: ref('master_users')
+          field: user_master_id
+  - name: product_master_id
+    description: Foreign key to master_products (hash of product_id)
+    data_type: string
+    data_tests:
+    - not_null
+    - relationships:
+        arguments:
+          to: ref('master_products')
+          field: product_master_id
+  - name: price_usd
+    description: Unit price in USD, as provided by source.
+    data_type: float64
+    data_tests:
+    - not_null
+    - dbt_utils.expression_is_true:
+        arguments:
+          expression: "> 0"
+  - name: price_gbp
+    description: Unit price converted to GBP using the daily usd_to_gbp_rate.
+    data_type: float64
+    data_tests:
+    - not_null
+    - dbt_utils.expression_is_true:
+        arguments:
+          expression: "> 0"
+  - name: discount_percentage
+    description: Discount applied to the order, as a percentage (0-100).
+    data_type: int64
+  - name: final_price_usd
+    description: Final price paid in USD after discount.
+    data_type: float64
+    data_tests:
+    - not_null
+    - dbt_utils.expression_is_true:
+        arguments:
+          expression: "> 0"
+  - name: final_price_gbp
+    description: Final price paid converted to GBP using the daily usd_to_gbp_rate.
+    data_type: float64
+    data_tests:
+    - not_null
+    - dbt_utils.expression_is_true:
+        arguments:
+          expression: "> 0"
+  - name: payment_method
+    description: Normalized payment method used for the order.
+    data_type: string
+    data_tests:
+    - not_null
+    - accepted_values:
+        arguments:
+          values: ['credit_card', 'debit_card', 'upi', 'cash_on_delivery', 'net_banking']
+  - name: order_date
+    description: Date the order was placed.
+    data_type: date
+    data_tests:
+    - not_null
+
+- name: master_users
+  description: >
+    One row per distinct user. Grain: one row per user_id.
+  config:
+    contract:
+      enforced: true
+  columns:
+  - name: user_master_id
+    description: Surrogate primary key (hash of user_id)
+    data_type: string
+    data_tests:
+    - unique
+    - not_null
+  - name: user_id
+    description: Natural key from the source system.
+    data_type: string
+    data_tests:
+    - unique
+    - not_null
+
+- name: master_products
+  description: >
+    One row per distinct product. Grain: one row per product_id.
+  config:
+    contract:
+      enforced: true
+  columns:
+  - name: product_master_id
+    description: Surrogate primary key (hash of product_id)
+    data_type: string
+    data_tests:
+    - unique
+    - not_null
+  - name: product_id
+    description: The unique identifier for the product, as provided by source.
+    data_type: string
+    data_tests:
+    - unique
+    - not_null
+  - name: product_category
+    description: Normalized product category (lowercased, spaces replaced with underscores).
+    data_type: string
+    data_tests:
+    - not_null
+    - accepted_values:
+        arguments:
+          values: ['beauty', 'books', 'clothing', 'electronics', 'home_&_kitchen', 'sports', 'toys']
