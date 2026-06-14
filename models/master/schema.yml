@@ -3,9 +3,13 @@ version: 2
 models:
 - name: master_orders
   description: >
-    One row per order (one user purchasing one product), with prices converted
-    to GBP using the daily USD->GBP exchange rate from the usd_to_gbp_rate seed.
-    Grain: one row per order_master_id.
+    One row per order (one user purchasing one product). Carries the
+    transactional amount paid (final_price_usd/final_price_gbp, after
+    discount_percentage) converted to GBP using the daily USD->GBP exchange
+    rate from the usd_to_gbp_rate seed, joined on order_date. Unit/list price
+    is a product attribute and lives on master_products, not here.
+    Grain: one row per order_master_id, which assumes at most one purchase
+    per (user_id, product_id, order_date).
   config:
     contract:
       enforced: true
@@ -34,25 +38,13 @@ models:
         arguments:
           to: ref('master_products')
           field: product_master_id
-  - name: price_usd
-    description: Unit price in USD, as provided by source.
-    data_type: float64
-    data_tests:
-    - not_null
-    - dbt_utils.expression_is_true:
-        arguments:
-          expression: "> 0"
-  - name: price_gbp
-    description: Unit price converted to GBP using the daily usd_to_gbp_rate.
-    data_type: float64
-    data_tests:
-    - not_null
-    - dbt_utils.expression_is_true:
-        arguments:
-          expression: "> 0"
   - name: discount_percentage
     description: Discount applied to the order, as a percentage (0-100).
     data_type: int64
+    data_tests:
+    - dbt_utils.expression_is_true:
+        arguments:
+          expression: "between 0 and 100"
   - name: final_price_usd
     description: Final price paid in USD after discount.
     data_type: float64
@@ -105,7 +97,8 @@ models:
 
 - name: master_products
   description: >
-    One row per distinct product. Grain: one row per product_id.
+    One row per distinct product, with its catalog attributes. Grain: one
+    row per product_id.
   config:
     contract:
       enforced: true
@@ -130,3 +123,11 @@ models:
     - accepted_values:
         arguments:
           values: ['beauty', 'books', 'clothing', 'electronics', 'home_&_kitchen', 'sports', 'toys']
+  - name: product_price_usd
+    description: Product unit/list price in USD, as provided by source.
+    data_type: float64
+    data_tests:
+    - not_null
+    - dbt_utils.expression_is_true:
+        arguments:
+          expression: "> 0"

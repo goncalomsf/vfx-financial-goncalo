@@ -47,6 +47,12 @@ dbt's documented "alternative pattern" for giving each layer its own dataset.
   `User_ID` and `Product_ID` is unique across the ~3,660 rows (no repeat
   customers/products). `master_users`/`master_products` still `select distinct`
   as a defensive dedup, even though it's a no-op on this data.
+- `order_master_id` (hash of `user_id` + `product_id` + `order_date`) assumes
+  at most one purchase per user/product/day — that triple is the order's
+  natural key. A same-day repeat purchase of the same product by the same
+  user would collide and fail the `unique` test on `order_master_id`;
+  acceptable here since every `User_ID`/`Product_ID` is already unique in
+  this dataset (see above).
 - `usd_to_gbp_rate` seed: a fixed 0.75 rate for every day of 2024 (per "0.75
   fixed rate is fine"). Dates were reformatted to ISO `YYYY-MM-DD` and typed
   as `DATE` (BigQuery requires ISO format for `DATE` columns) so it can be
@@ -71,13 +77,25 @@ dbt's documented "alternative pattern" for giving each layer its own dataset.
 - **Frozen master schemas.** All three master models have
   `config.contract.enforced: true` with explicit `data_type` per column — any
   column added/removed/retyped without updating `schema.yml` fails the build.
-- **Reusable macro.** Currency conversion (`amount * usd_to_gpb_rate`) is
-  duplicated for `price_gbp` and `final_price_gbp` in `master_orders`, so it's
-  extracted into `macros/convert_to_gbp.sql`.
-- **Data quality.** 27 tests across the master layer: `unique`/`not_null` on
+- **Unit price lives on `master_products`, not `master_orders`.** A product's
+  price is a product attribute (and, per the SCD2 note below, the kind of
+  attribute that can change over time), so `master_products.product_price_usd`
+  is the single source of truth for it. `master_orders` only carries
+  `final_price_usd`/`final_price_gbp` — the amount actually paid after
+  `discount_percentage` — which is the transactional fact and needs to stay
+  point-in-time-accurate regardless of later catalog price changes. GBP
+  conversion is only meaningful where there's a date to look up a daily rate,
+  so it's applied to `final_price_*` via `order_date` in `master_orders` and
+  not duplicated on `master_products` (which has no date at product grain).
+- **Reusable macro.** Currency conversion (`amount * usd_to_gbp_rate`) is
+  extracted into `macros/convert_to_gbp.sql` and used for `final_price_gbp` in
+  `master_orders` — a named macro so any future GBP conversion reuses the same
+  formula.
+- **Data quality.** 26 tests across the master layer: `unique`/`not_null` on
   every key, `relationships` for FK validation (`master_orders` →
   `master_users`/`master_products`), `accepted_values` on `payment_method` and
-  `product_category`, and positive-value checks on every price/GBP column.
+  `product_category`, positive-value checks on every price/GBP column, and a
+  `0-100` range check on `discount_percentage`.
 
 ## GDPR delete handling (master_users)
 
@@ -114,11 +132,18 @@ PII columns would be scrubbed once they exist.
 
 ## SCD2 note (master_products)
 
-Best candidate attributes: **`product_category`** and **`price_usd`** — both
-could legitimately change for the same `product_id` over time. Approach: a
-dbt snapshot with the `check` strategy on these two columns over a
+Best candidate attributes: **`product_category`** and **`product_price_usd`**
+— both could legitimately change for the same `product_id` over time.
+Approach: a dbt snapshot with the `check` strategy on these two columns over a
 products-grain source, producing `dbt_valid_from`/`dbt_valid_to` for historical
 category/pricing analysis.
+
+This is also why `master_orders` doesn't carry a denormalized unit price:
+once `master_products` is snapshotted with SCD2, the price/category *as of
+the order* is recovered by joining on `product_id` with
+`order_date between dbt_valid_from and coalesce(dbt_valid_to, '9999-12-31')`
+— giving point-in-time accuracy without duplicating a mutable attribute onto
+the order fact table.
 
 Not implemented: the source is a single static load with no repeated extracts
 to diff, so a snapshot today would only capture one version — there's no
@@ -131,7 +156,8 @@ history to demonstrate.
 - A real `deletion_requests` seed + anonymization `CASE WHEN` in
   `master_users`, demoed end-to-end.
 - dbt snapshots for SCD2 on `master_products`, simulating two source loads to
-  show `dbt_valid_from`/`dbt_valid_to` in action.
+  show `dbt_valid_from`/`dbt_valid_to` in action, plus a worked example of the
+  point-in-time join from `master_orders` described in the SCD2 note above.
 - Incremental `master_orders` instead of full-refresh tables, with a
   late-arriving-updates strategy (merge on `order_master_id`, track
   status/cancellations/refunds via an `is_current`/`status` column).
